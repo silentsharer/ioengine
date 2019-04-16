@@ -1,0 +1,221 @@
+package ioengine
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"sync"
+)
+
+// MemoryMap disk IO mode
+type MemoryMap struct {
+	data   []byte
+	offset int
+	end    int
+	*os.File
+	sync.RWMutex
+}
+
+func newMemoryMap(name string, opt Options) (*MemoryMap, error) {
+	fd, err := os.OpenFile(name, opt.Flag, opt.Perm)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := Mmap(fd, 0, opt.MmapSize, opt.MmapWritable)
+	if err != nil {
+		return nil, err
+	}
+	if err := Madvise(data); err != nil {
+		return nil, err
+	}
+
+	mmap := &MemoryMap{
+		data:   data,
+		offset: 0,
+		end:    0,
+		File:   fd,
+	}
+	runtime.SetFinalizer(mmap, (*mmap).Close)
+	return mmap, nil
+}
+
+// Fd wraps standard I/O Fd
+func (mmap *MemoryMap) Fd() uintptr {
+	return mmap.File.Fd()
+}
+
+// Stat wraps standard I/O Stat
+func (mmap *MemoryMap) Stat() (os.FileInfo, error) {
+	return mmap.File.Stat()
+}
+
+// Read like any io.Read, Shares the same file offset.
+func (mmap *MemoryMap) Read(b []byte) (int, error) {
+	mmap.RLock()
+	defer mmap.RUnlock()
+
+	if mmap.data == nil {
+		return 0, errors.New("mmap: closed")
+	}
+	if mmap.offset >= len(mmap.data) {
+		return 0, io.EOF
+	}
+	n := copy(b, mmap.data[mmap.offset:])
+	mmap.offset += n
+	if n < len(b) {
+		return n, io.EOF
+	}
+
+	return n, nil
+}
+
+// ReadAt like any io.ReaderAt, clients can execute parallel ReadAt calls.
+func (mmap *MemoryMap) ReadAt(b []byte, off int64) (int, error) {
+	mmap.RLock()
+	defer mmap.RUnlock()
+
+	if mmap.data == nil {
+		return 0, errors.New("mmap: closed")
+	}
+	if off < 0 || int64(len(mmap.data)) < off {
+		return 0, fmt.Errorf("mmap: invalid ReadAt offset %d", off)
+	}
+	n := copy(b, mmap.data[off:])
+	if n < len(b) {
+		return n, io.EOF
+	}
+
+	return n, nil
+}
+
+// Write like any io.Write, Shares the same file offset.
+// If the mmaped file size is reached, it will return short write error.
+func (mmap *MemoryMap) Write(b []byte) (int, error) {
+	mmap.Lock()
+	defer mmap.Unlock()
+
+	if mmap.data == nil {
+		return 0, errors.New("mmap: closed")
+	}
+	if mmap.offset >= len(mmap.data) {
+		return 0, io.ErrShortWrite
+	}
+	n := copy(mmap.data[mmap.offset:], b)
+	mmap.offset += n
+	mmap.reCalcEnd(mmap.offset)
+	if n < len(b) {
+		return n, io.ErrShortWrite
+	}
+
+	return n, nil
+}
+
+// WriteAt like any io.WriteAt, clients can execute parallel WriteAt calls without panic.
+func (mmap *MemoryMap) WriteAt(b []byte, off int64) (int, error) {
+	mmap.Lock()
+	defer mmap.Unlock()
+
+	if mmap.data == nil {
+		return 0, errors.New("mmap: closed")
+	}
+	if off < 0 || int64(len(mmap.data)) < off {
+		return 0, fmt.Errorf("mmap: invalid WriteAt offset %d", off)
+	}
+	n := copy(mmap.data[off:], b)
+	mmap.reCalcEnd(int(off) + n)
+	if n < len(b) {
+		return n, io.ErrShortWrite
+	}
+
+	return n, nil
+}
+
+// Seek like any io.Seek, if the new offset is greater than mmaped file size, it will return error.
+func (mmap *MemoryMap) Seek(offset int64, whence int) (int64, error) {
+	mmap.Lock()
+	defer mmap.Unlock()
+
+	var nOffset int64
+	switch whence {
+	case 0:
+		nOffset = offset
+	case 1:
+		nOffset = int64(mmap.offset) + offset
+	case 2:
+		nOffset = int64(mmap.end) + offset
+	}
+
+	if nOffset < 0 || nOffset > int64(len(mmap.data)) {
+		return 0, errors.New("invalid argument")
+	}
+	mmap.offset = int(nOffset)
+
+	return nOffset, nil
+}
+
+// ReadAtv like linux preadv, read from the specifies offset and dose not change the file offset.
+func (mmap *MemoryMap) ReadAtv(off int64, bs ...[]byte) (int, error) {
+	return 0, nil
+}
+
+// WriteAtv like linux pwritev, write to the specifies offset and dose not change the file offset.
+func (mmap *MemoryMap) WriteAtv(off int64, bs ...[]byte) (int, error) {
+	return 0, nil
+}
+
+// Append write data to the end of file.
+func (mmap *MemoryMap) Append(bs ...[]byte) (int, error) {
+	return 0, nil
+}
+
+// Truncate changes the size of file, it does not change I/O offset
+// if the truncated size is greater than mmaped file size, it will return error.
+func (mmap *MemoryMap) Truncate(size int64) error {
+	mmap.Lock()
+	defer mmap.Unlock()
+
+	if size < 0 || size > int64(len(mmap.data)) {
+		return errors.New("invalid argument")
+	}
+
+	for i := int(size); i < mmap.end; i++ {
+		mmap.data[i] = 0
+	}
+
+	mmap.end = int(size)
+	return nil
+}
+
+// Sync wraps mmap sync
+func (mmap *MemoryMap) Sync() error {
+	mmap.Lock()
+	defer mmap.Unlock()
+	return Sync(mmap.data)
+}
+
+// Close closes the File
+func (mmap *MemoryMap) Close() error {
+	mmap.Lock()
+	defer mmap.Unlock()
+
+	if mmap.File != nil {
+		mmap.File.Close()
+	}
+	if mmap.data == nil {
+		return nil
+	}
+
+	data := mmap.data
+	mmap.data = nil
+	runtime.SetFinalizer(mmap, nil)
+	return Munmap(data)
+}
+
+func (mmap *MemoryMap) reCalcEnd(off int) {
+	if off > mmap.end {
+		mmap.end = off
+	}
+}
