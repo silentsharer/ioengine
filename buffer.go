@@ -45,9 +45,9 @@ func NewBuffers() *Buffers {
 	return &buffers
 }
 
-func (v *Buffers) Write(b []byte) (int, error) {
+func (v *Buffers) Write(b []byte) *Buffers {
 	*v = append(*v, b)
-	return len(b), nil
+	return v
 }
 
 func (v *Buffers) Read(b []byte) (n int, err error) {

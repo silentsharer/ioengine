@@ -2,17 +2,13 @@
 
 package ioengine
 
-// ReadAtv like linux preadv, read from the specifies offset and dose not change the file offset.
-func (fi *FileIO) ReadAtv(off int64, bs ...[]byte) (int, error) {
-	return 0, nil
-}
-
-// WriteAtv like linux pwritev, write to the specifies offset and dose not change the file offset.
-func (fi *FileIO) WriteAtv(off int64, bs ...[]byte) (int, error) {
-	return 0, nil
+// WriteAtv simulate writeatv by calling writev serially and dose not change the file offset.
+func (fi *FileIO) WriteAtv(bs [][]byte, off int64) (int, error) {
+	return genericWriteAtv(fi, bs, off)
 }
 
 // Append write data to the end of file.
-func (fi *FileIO) Append(bs ...[]byte) (int, error) {
-	return 0, nil
+// we recommend that open file with O_APPEND
+func (fi *FileIO) Append(bs [][]byte) (int, error) {
+	return genericAppend(fi, bs)
 }
