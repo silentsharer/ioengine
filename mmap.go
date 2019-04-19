@@ -133,6 +133,44 @@ func (mmap *MemoryMap) WriteAt(b []byte, off int64) (int, error) {
 	return n, nil
 }
 
+func (mmap *MemoryMap) WriteAtv(bs [][]byte, off int64) (int, error) {
+	mmap.Lock()
+	defer mmap.Unlock()
+
+	if mmap.data == nil {
+		return 0, errors.New("mmap: closed")
+	}
+	if off < 0 || int64(len(mmap.data)) < off {
+		return 0, fmt.Errorf("mmap: invalid WriteAt offset %d", off)
+	}
+
+	var n, nw, nOffset int
+	nOffset = int(off)
+	for _, b := range bs {
+		nw = copy(mmap.data[nOffset:], b)
+		mmap.reCalcEnd(int(nOffset) + nw)
+		nOffset += nw
+		n += nw
+		if nw < len(b) {
+			return n, io.ErrShortWrite
+		}
+	}
+
+	return n, nil
+}
+
+// Append write data to the end of file.
+func (mmap *MemoryMap) Append(bs [][]byte) (int, error) {
+	mmap.Lock()
+	defer mmap.Unlock()
+
+	if mmap.data == nil {
+		return 0, errors.New("mmap: closed")
+	}
+
+	return mmap.WriteAtv(bs, int64(mmap.end))
+}
+
 // Seek like any io.Seek, if the new offset is greater than mmaped file size, it will return error.
 func (mmap *MemoryMap) Seek(offset int64, whence int) (int64, error) {
 	mmap.Lock()
@@ -154,21 +192,6 @@ func (mmap *MemoryMap) Seek(offset int64, whence int) (int64, error) {
 	mmap.offset = int(nOffset)
 
 	return nOffset, nil
-}
-
-// ReadAtv like linux preadv, read from the specifies offset and dose not change the file offset.
-func (mmap *MemoryMap) ReadAtv(off int64, bs ...[]byte) (int, error) {
-	return 0, nil
-}
-
-// WriteAtv like linux pwritev, write to the specifies offset and dose not change the file offset.
-func (mmap *MemoryMap) WriteAtv(off int64, bs ...[]byte) (int, error) {
-	return 0, nil
-}
-
-// Append write data to the end of file.
-func (mmap *MemoryMap) Append(bs ...[]byte) (int, error) {
-	return 0, nil
 }
 
 // Truncate changes the size of file, it does not change I/O offset
@@ -194,6 +217,14 @@ func (mmap *MemoryMap) Sync() error {
 	mmap.Lock()
 	defer mmap.Unlock()
 	return Sync(mmap.data)
+}
+
+func (mmap *MemoryMap) FLock() (err error) {
+	return nil
+}
+
+func (mmap *MemoryMap) FUnlock() error {
+	return nil
 }
 
 // Close closes the File
