@@ -18,17 +18,14 @@ func newDirectIO(name string, opt Options) (*DirectIO, error) {
 	return &DirectIO{File: fd}, nil
 }
 
-// ReadAtv like linux preadv, read from the specifies offset and dose not change the file offset.
-func (dio *DirectIO) ReadAtv(off int64, bs ...[]byte) (int, error) {
-	return 0, nil
+func (dio *DirectIO) FLock() error {
+	return nil
 }
 
-// WriteAtv like linux pwritev, write to the specifies offset and dose not change the file offset.
-func (dio *DirectIO) WriteAtv(off int64, bs ...[]byte) (int, error) {
-	return 0, nil
+func (dio *DirectIO) FUnlock() error {
+	return nil
 }
 
-// Append write data to the end of file.
-func (dio *DirectIO) Append(bs ...[]byte) (int, error) {
-	return 0, nil
+func (dio *DirectIO) Close() error {
+	return nil
 }

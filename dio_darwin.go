@@ -1,3 +1,5 @@
+// +build darwin
+
 package ioengine
 
 import (
@@ -7,7 +9,7 @@ import (
 
 const (
 	// AlignSize OSX doesn't need any alignment
-	AlignSize = 512
+	AlignSize = 0
 )
 
 // OpenFileWithDIO open files with no cache on darwin.
@@ -25,4 +27,15 @@ func OpenFileWithDIO(name string, flag int, perm os.FileMode) (*os.File, error) 
 	}
 
 	return fd, nil
+}
+
+// WriteAtv simulate writeatv by calling writev serially and dose not change the file offset.
+func (dio *DirectIO) WriteAtv(bs [][]byte, off int64) (int, error) {
+	return generalWriteAtv(dio, bs, off)
+}
+
+// Append write data to the end of file.
+// we recommend that open file with O_APPEND
+func (dio *DirectIO) Append(bs [][]byte) (int, error) {
+	return generalAppend(dio, bs)
 }

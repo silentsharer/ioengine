@@ -1,3 +1,5 @@
+// +build windows
+
 package ioengine
 
 import (
@@ -84,4 +86,15 @@ func utf16FromString(s string) ([]uint16, error) {
 		}
 	}
 	return utf16.Encode([]rune(s + "\x00")), nil
+}
+
+// WriteAtv simulate writeatv by calling writev serially and dose not change the file offset.
+func (dio *DirectIO) WriteAtv(bs [][]byte, off int64) (int, error) {
+	return generalWriteAtv(fi, bs, off)
+}
+
+// Append write data to the end of file.
+// we recommend that open file with O_APPEND
+func (dio *DirectIO) Append(bs [][]byte) (int, error) {
+	return generalAppend(fi, bs)
 }
