@@ -9,16 +9,16 @@ import (
 // MemAlign like linux posix_memalign.
 // block start address must be a multiple of AlignSize.
 // block size also must be a multiple of AlignSize.
-func MemAlign(blockSize uint) ([]byte, error) {
+func MemAlign(blockSize, alignSize uint) ([]byte, error) {
 	// make sure blockSize is a multiple of AlignSize.
-	if AlignSize != 0 && blockSize&(AlignSize-1) != 0 {
+	if alignSize != 0 && blockSize&(alignSize-1) != 0 {
 		return nil, errors.New("invalid argument")
 	}
-	block := make([]byte, blockSize+AlignSize)
-	remainder := alignment(block, AlignSize)
+	block := make([]byte, blockSize+alignSize)
+	remainder := alignment(block, alignSize)
 	var offset uint
 	if remainder != 0 {
-		offset = AlignSize - remainder
+		offset = alignSize - remainder
 	}
 	return block[offset : offset+blockSize], nil
 }
@@ -40,6 +40,7 @@ func alignment(block []byte, alignSize uint) uint {
 // this is applied to readv, writev, preadv, pwritev.
 type Buffers [][]byte
 
+// NewBuffers init buffer slice by default cap 128
 func NewBuffers() *Buffers {
 	buffers := make(Buffers, 0, 128)
 	return &buffers
@@ -63,6 +64,7 @@ func (v *Buffers) Read(b []byte) (n int, err error) {
 	return
 }
 
+// WriteTo direct write to writer
 func (v *Buffers) WriteTo(w io.Writer) (n int64, err error) {
 	for _, b := range *v {
 		nb, err := w.Write(b)
