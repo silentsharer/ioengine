@@ -3,7 +3,6 @@
 package ioengine
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,56 +12,76 @@ import (
 
 const lockFile = "flock"
 
-// FileLock holds a lock on a pid file inside.
+// FileLock holds a lock on a hidden file inside.
 type FileLock struct {
 	path     string
 	fd       *os.File
 	writable bool
 }
 
-// NewFileLock return file lock
+// NewFileLock return internal file lock
+// example: The file lock format for the file name 'test' is .test-flock
 func NewFileLock(path string, writable bool) (*FileLock, error) {
-	absLockFile, err := filepath.Abs(filepath.Join(path, lockFile))
-	if err != nil {
-		return nil, errors.New("can't get absolute path for lock file")
+	absLockFile := path
+	if filepath.IsAbs(path) {
+		absLockFile = fmt.Sprintf("%s/.%s-%s", filepath.Dir(path), filepath.Base(path), lockFile)
+	} else {
+		absLockFileTmp, err := filepath.Abs(fmt.Sprintf(".%s-%s", path, lockFile))
+		if err != nil {
+			return nil, err
+		}
+		absLockFile = absLockFileTmp
 	}
 
-	fd, err := os.Open(absLockFile)
-	if err != nil {
-		return nil, fmt.Errorf("can't open dir: %v", err)
+	if _, err := os.Stat(absLockFile); err != nil {
+		if os.IsNotExist(err) {
+			fd, err := os.Create(absLockFile)
+			if err != nil {
+				return nil, err
+			}
+			fd.Close()
+		}
 	}
 
-	flock := &FileLock{
+	return &FileLock{
 		path:     absLockFile,
-		fd:       fd,
 		writable: writable,
-	}
-	return flock, nil
+	}, nil
 }
 
-// FLock file lock
+// FLock a block file lock
 func (fl *FileLock) FLock() error {
-	opts := unix.LOCK_EX | unix.LOCK_NB
+	fd, err := os.Open(fl.path)
+	if err != nil {
+		return fmt.Errorf("lock file: %v", err)
+	}
+
+	fl.fd = fd
+	opts := unix.LOCK_EX
 	if !fl.writable {
-		opts = unix.LOCK_SH | unix.LOCK_NB
+		opts = unix.LOCK_SH
 	}
 	if err := unix.Flock(int(fl.fd.Fd()), opts); err != nil {
-		return fmt.Errorf("can't acquire file lock: %v", err)
+		return fmt.Errorf("lock file: %v", err)
 	}
 	return nil
 }
 
 // FUnlock file unlock
 func (fl *FileLock) FUnlock() error {
-	if err := unix.Flock(int(fl.fd.Fd()), unix.LOCK_UN); err != nil {
-		return fmt.Errorf("can't unlock file: %v", err)
+	if fl.fd == nil {
+		return nil
 	}
-	return nil
+	if err := unix.Flock(int(fl.fd.Fd()), unix.LOCK_UN); err != nil {
+		return fmt.Errorf("unlock file: %v", err)
+	}
+	return fl.fd.Close()
 }
 
-// Release deletes the pid file and releases lock on the file
+// Release deletes the pid file and auto releases lock on the file
 func (fl *FileLock) Release() error {
-	err := fl.fd.Close()
-	err = os.Remove(fl.path)
-	return err
+	if fl.fd != nil {
+		fl.fd.Close()
+	}
+	return os.Remove(fl.path)
 }
