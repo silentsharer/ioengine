@@ -2,121 +2,121 @@ package ioengine
 
 import (
 	"fmt"
-	"sync"
+	"os"
 	"testing"
-	"time"
 )
 
 const ConcurrentNumber = 100
 
+var fileID int
+
 func NewFileIO() (*FileIO, error) {
 	opt := DefaultOptions
-	name := "/tmp/fileio"
+	opt.IOEngine = StandardIO
+	fileID++
+	name := fmt.Sprintf("/tmp/standardio/%d", fileID)
+	os.Remove(name)
 	return newFileIO(name, opt)
 }
 
-func TestSingleProcessConcurrentWrite(t *testing.T) {
+func NewFileIOWithAppend() (*FileIO, error) {
+	opt := DefaultOptions
+	opt.IOEngine = StandardIO
+	opt.Flag = os.O_RDWR | os.O_CREATE | os.O_SYNC | os.O_APPEND
+	fileID++
+	name := fmt.Sprintf("/tmp/standardio/%d", fileID)
+	os.Remove(name)
+	return newFileIO(name, opt)
+}
+
+func TestStandardIOWriteAtv(t *testing.T) {
 	fd, err := NewFileIO()
 	if err != nil {
 		t.Fatalf("Failed to new fileio: %v", err)
 	}
 	defer fd.Close()
 
-	fmt.Println(fd.Truncate(-1))
+	b := NewBuffers()
+	b.Write([]byte("hello")).Write([]byte("world"))
 
-	wg := sync.WaitGroup{}
-	fn := func() {
-		if _, err := fd.Write([]byte("0123456789")); err != nil {
-			t.Fatalf("Failed to write disk: %v", err)
-		}
-		wg.Done()
+	nw, err := fd.WriteAtv(*b, 2)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	for i := 0; i < ConcurrentNumber; i++ {
-		wg.Add(1)
-		go fn()
+	if nw != 10 {
+		t.Fatal("short write")
 	}
-	wg.Wait()
 }
 
-func TestSingleProcessConcurrentRead(t *testing.T) {
+func TestStandardIOAppend(t *testing.T) {
 	fd, err := NewFileIO()
 	if err != nil {
 		t.Fatalf("Failed to new fileio: %v", err)
 	}
 	defer fd.Close()
 
-	wg := sync.WaitGroup{}
-	fn := func() {
-		data := make([]byte, 5, 5)
-		if _, err := fd.Read(data); err != nil {
-			t.Fatalf("Failed to read disk: %v", err)
-		}
-		t.Log(string(data))
-		wg.Done()
+	b := NewBuffers()
+	b.Write([]byte("hello")).Write([]byte("world"))
+
+	nw, err := fd.Append(*b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nw != 10 {
+		t.Fatal("short write 01")
 	}
 
-	for i := 0; i < ConcurrentNumber; i++ {
-		wg.Add(1)
-		go fn()
+	nw, err = fd.Append(*b)
+	if err != nil {
+		t.Fatal(err)
 	}
-	wg.Wait()
+	if nw != 10 {
+		t.Fatal("short write 02")
+	}
+
+	stat, err := fd.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stat.Size() != 20 {
+		t.Fatal("short write 03")
+	}
 }
 
-func TestSingleProcessConcurrentReadWrite(t *testing.T) {
+func TestStandardIOComposeWrite(t *testing.T) {
 	fd, err := NewFileIO()
 	if err != nil {
 		t.Fatalf("Failed to new fileio: %v", err)
 	}
 	defer fd.Close()
 
-	readFn := func() {
-		data := make([]byte, 5, 5)
-		if _, err := fd.Read(data); err != nil {
-			t.Fatalf("Failed to read disk: %v", err)
-		}
-		fmt.Println(string(data))
-	}
-
-	writeFn := func() {
-		if _, err := fd.Write([]byte("0123456789")); err != nil {
-			t.Fatalf("Failed to write disk: %v", err)
-		}
-	}
-
-	for i := 0; i < ConcurrentNumber; i++ {
-		go writeFn()
-		go readFn()
-	}
-
-	time.Sleep(1000000)
-}
-
-func TestMultiProcessConcurrentWrite(t *testing.T) {
-	fds := make([]*FileIO, 0, ConcurrentNumber)
-	for i := 0; i < ConcurrentNumber; i++ {
-		fd, err := NewFileIO()
+	for _, b := range [][]byte{[]byte("12345"), []byte("")} {
+		nw, err := fd.Write(b)
 		if err != nil {
-			t.Fatalf("Failed to new fileio: %v", err)
+			t.Fatal(err)
 		}
-		fds = append(fds, fd)
-	}
-
-	wg := sync.WaitGroup{}
-	fn := func(fd *FileIO) {
-		if _, err := fd.Write([]byte("0123456789")); err != nil {
-			t.Fatalf("Failed to write disk: %v", err)
+		if nw != len(b) {
+			t.Fatal("write: short write")
 		}
-		wg.Done()
 	}
 
-	for i := 0; i < ConcurrentNumber; i++ {
-		wg.Add(1)
-		go fn(fds[i])
+	b := NewBuffers()
+	for i := 0; i < 2; i++ {
+		nw, err := fd.Append(*b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nw != b.Length() {
+			t.Fatal("append: short write")
+		}
+		b.Write([]byte("hello"))
 	}
-	wg.Wait()
 
-	for i := 0; i < ConcurrentNumber; i++ {
-		fds[i].Close()
+	nw, err := fd.Write([]byte("world"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nw != 5 {
+		t.Fatal("write after append: short write")
 	}
 }
