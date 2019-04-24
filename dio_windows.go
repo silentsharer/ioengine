@@ -11,6 +11,8 @@ import (
 const (
 	// AlignSize size to align the buffer
 	AlignSize = 4096
+	// BlockSize direct IO minimum number of bytes to write
+	BlockSize = 4096
 
 	// Extra flags for windows
 	FILE_FLAG_NO_BUFFERING  = 0x20000000
@@ -88,7 +90,7 @@ func utf16FromString(s string) ([]uint16, error) {
 	return utf16.Encode([]rune(s + "\x00")), nil
 }
 
-// WriteAtv simulate writeatv by calling writev serially and dose not change the file offset.
+// WriteAtv simulate writeatv by calling writeat serially and dose not change the file offset.
 func (dio *DirectIO) WriteAtv(bs [][]byte, off int64) (int, error) {
 	return genericWriteAtv(fi, bs, off)
 }

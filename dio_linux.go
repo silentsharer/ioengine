@@ -10,6 +10,8 @@ import (
 const (
 	// AlignSize size to align the buffer
 	AlignSize = 512
+	// BlockSize direct IO minimum number of bytes to write
+	BlockSize = 4096
 )
 
 // OpenFileWithDIO open files with O_DIRECT flag

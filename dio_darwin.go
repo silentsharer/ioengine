@@ -10,6 +10,8 @@ import (
 const (
 	// AlignSize OSX doesn't need any alignment
 	AlignSize = 0
+	// BlockSize direct IO minimum number of bytes to write
+	BlockSize = 4096
 )
 
 // OpenFileWithDIO open files with no cache on darwin.
