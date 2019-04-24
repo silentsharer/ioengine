@@ -19,7 +19,7 @@ var bas = []blockAlign{
 
 func TestMemAlign(t *testing.T) {
 	for _, ba := range bas {
-		b, err := MemAlign(ba.blockSize, ba.alignSize)
+		b, err := MemAlignWithBase(ba.blockSize, ba.alignSize)
 		if err != nil {
 			t.Fatal(err)
 		}

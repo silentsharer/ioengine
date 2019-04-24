@@ -6,10 +6,10 @@ import (
 	"unsafe"
 )
 
-// MemAlign like linux posix_memalign.
+// MemAlignWithBase like linux posix_memalign.
 // block start address must be a multiple of AlignSize.
 // block size also must be a multiple of AlignSize.
-func MemAlign(blockSize, alignSize uint) ([]byte, error) {
+func MemAlignWithBase(blockSize, alignSize uint) ([]byte, error) {
 	// make sure blockSize is a multiple of AlignSize.
 	if alignSize != 0 && blockSize&(alignSize-1) != 0 {
 		return nil, errors.New("invalid argument")
@@ -23,6 +23,11 @@ func MemAlign(blockSize, alignSize uint) ([]byte, error) {
 	return block[offset : offset+blockSize], nil
 }
 
+// MemAlign mem align
+func MemAlign(blockSize uint) ([]byte, error) {
+	return MemAlignWithBase(blockSize, AlignSize)
+}
+
 // alignment returns alignment of the block address in memory with reference to alignSize.
 func alignment(block []byte, alignSize uint) uint {
 	// if block is nil or length is 0, it will return 0.
@@ -30,7 +35,7 @@ func alignment(block []byte, alignSize uint) uint {
 		return 0
 	}
 	// make sure a bit operation mod divisor must be a multiple of 2.
-	if alignSize == 0 || alignSize&1 != 0 {
+	if alignSize == 0 || alignSize == 1 || alignSize&1 != 0 {
 		return 0
 	}
 	return uint(uintptr(unsafe.Pointer(&block[0])) & uintptr(alignSize-1))
