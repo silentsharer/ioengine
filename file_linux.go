@@ -17,7 +17,7 @@ func (fi *FileIO) WriteAtv(bs [][]byte, off int64) (int, error) {
 // Append write data to the end of file.
 // we recommend that open file with O_APPEND.
 func (fi *FileIO) Append(bs [][]byte) (int, error) {
-	return generalAppend(fi, bs)
+	return genericAppend(fi, bs)
 }
 
 func linuxWriteAtv(fd File, bs [][]byte, off int64) (n int, err error) {
@@ -45,7 +45,7 @@ func linuxWriteAtv(fd File, bs [][]byte, off int64) (n int, err error) {
 		}
 		wrote, err = pwritev(int(fd.Fd()), iovecs, off)
 		n += int(wrote)
-		consume(bs, int64(wrote))
+		consume(&bs, int64(wrote))
 		if err != nil {
 			if err.(syscall.Errno) == syscall.EAGAIN {
 				continue
@@ -70,7 +70,7 @@ func pwritev(fd int, iovecs []syscall.Iovec, off int64) (uintptr, error) {
 	}
 
 	n, _, err := syscall.Syscall6(syscall.SYS_PWRITEV, uintptr(fd), uintptr(p), uintptr(len(iovecs)), uintptr(off), 0, 0)
-	if err != nil {
+	if err != 0 {
 		return 0, os.NewSyscallError("PWRITEV", err)
 	}
 
@@ -78,14 +78,14 @@ func pwritev(fd int, iovecs []syscall.Iovec, off int64) (uintptr, error) {
 }
 
 // consume removes data from a slice of byte slices, for writev.
-func consume(v [][]byte, n int64) {
-	for len(v) > 0 {
-		ln0 := int64(len(v[0]))
+func consume(v *[][]byte, n int64) {
+	for len(*v) > 0 {
+		ln0 := int64(len((*v)[0]))
 		if ln0 > n {
-			v[0] = v[0][n:]
+			(*v)[0] = (*v)[0][n:]
 			return
 		}
 		n -= ln0
-		v = v[1:]
+		*v = (*v)[1:]
 	}
 }
