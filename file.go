@@ -6,12 +6,11 @@ import (
 	"sync"
 )
 
-var once sync.Once
-
 // FileIO Standrad I/O mode
 type FileIO struct {
 	path string
 	opt  Options
+	once sync.Once
 	*os.File
 	*FileLock
 }
@@ -47,7 +46,7 @@ func newFileIO(name string, opt Options) (*FileIO, error) {
 // if file lock not init, we will init once.
 func (fi *FileIO) FLock() (err error) {
 	if fi.FileLock == nil {
-		once.Do(func() {
+		fi.once.Do(func() {
 			if fi.FileLock == nil {
 				fi.FileLock, err = NewFileLock(fi.path, true)
 			}
@@ -57,7 +56,7 @@ func (fi *FileIO) FLock() (err error) {
 		return err
 	}
 	if fi.FileLock == nil {
-		return errors.New("Uninitialized lock")
+		return errors.New("Uninitialized file lock")
 	}
 	return fi.FileLock.FLock()
 }
@@ -75,6 +74,15 @@ func (fi *FileIO) Close() error {
 	if fi.FileLock == nil {
 		return fi.File.Close()
 	}
-	fi.FileLock.Release()
+
+	fi.FileLock.FUnlock()
+	// do we need to release file lock?
+	// what will happen if release file lock while other process is using file lock?
+	// fi.FileLock.Release()
 	return fi.File.Close()
+}
+
+// Option return File options
+func (fi *FileIO) Option() Options {
+	return fi.opt
 }
