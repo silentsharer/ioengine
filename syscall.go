@@ -1,14 +1,13 @@
 package ioengine
 
 import (
-	"io"
 	"os"
-	"syscall"
 )
 
 // Single-word zero for use when we need a valid pointer to 0 bytes.
 var zero uintptr
 
+// simulate writeatv by calling writeat serially and dose not change the file offset.
 func genericWriteAtv(fd File, bs [][]byte, off int64) (n int, err error) {
 	nOffset := off
 	nw := 0
@@ -18,13 +17,21 @@ func genericWriteAtv(fd File, bs [][]byte, off int64) (n int, err error) {
 		n += nw
 		nOffset += int64(nw)
 		if err != nil {
-			if err.(syscall.Errno) == syscall.EAGAIN {
-				continue
-			}
 			break
 		}
-		if nw == 0 {
-			err = io.ErrUnexpectedEOF
+	}
+
+	return n, err
+}
+
+// simulate writev by calling write serially and it will change the file offset.
+func genericWritev(fd File, bs [][]byte) (n int, err error) {
+	nw := 0
+
+	for _, b := range bs {
+		nw, err = fd.Write(b)
+		n += nw
+		if err != nil {
 			break
 		}
 	}
@@ -33,19 +40,26 @@ func genericWriteAtv(fd File, bs [][]byte, off int64) (n int, err error) {
 }
 
 func genericAppend(fd File, bs [][]byte) (int, error) {
-	stat, err := fd.Stat()
+	opt := fd.Option()
+
+	// open file with O_APPEND not need to flock
+	if (opt.Flag & os.O_APPEND) > 0 {
+		return genericWritev(fd, bs)
+	}
+
+	// acquire file size to append write
+	size, err := fd.Seek(0, os.SEEK_END)
 	if err != nil {
 		return 0, err
 	}
-
-	// open file with O_APPEND not need to flock
-	if stat.Mode & os.O_APPEND {
-		return fd.WriteAtv(bs, stat.Size())
-	}
+	// Because use writeat to simulate an append write
+	// it doesn't change the file offset, to keep append semantic
+	// so that make sure file offset is the file end.
+	defer fd.Seek(0, os.SEEK_END)
 
 	if err := fd.FLock(); err != nil {
-		return err
+		return 0, err
 	}
-	err = fd.WriteAtv(bs, stat.Size())
-	return fd.FUnlock()
+	defer fd.FUnlock()
+	return fd.WriteAtv(bs, size)
 }
