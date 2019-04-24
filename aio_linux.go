@@ -26,11 +26,6 @@ type timespec struct {
 	nsec int
 }
 
-type IOvec struct {
-	Base unsafe.Pointer
-	Len  uint64
-}
-
 type IOContext uint
 
 func (ioctx *IOContext) Setup(maxEvents int) error {
@@ -127,7 +122,7 @@ func (iocb *iocb) PrepPwrite(fd int, buf []byte, offset int64) {
 	iocb.offset = offset
 }
 
-func (iocb *iocb) PrepPreadv(fd int, iovecs []IOvec, offset int64) {
+func (iocb *iocb) PrepPreadv(fd int, iovecs []syscall.Iovec, offset int64) {
 	var p unsafe.Pointer
 	if len(iovecs) > 0 {
 		p = unsafe.Pointer(&iovecs[0])
@@ -142,7 +137,7 @@ func (iocb *iocb) PrepPreadv(fd int, iovecs []IOvec, offset int64) {
 	iocb.offset = offset
 }
 
-func (iocb *iocb) PrepPwritev(fd int, iovecs []IOvec, offset int64) {
+func (iocb *iocb) PrepPwritev(fd int, iovecs []syscall.Iovec, offset int64) {
 	var p unsafe.Pointer
 	if len(iovecs) > 0 {
 		p = unsafe.Pointer(&iovecs[0])
