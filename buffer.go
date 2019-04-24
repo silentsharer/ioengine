@@ -78,6 +78,14 @@ func (v *Buffers) WriteTo(w io.Writer) (n int64, err error) {
 	return n, nil
 }
 
+// Length return buffers byte total length
+func (v *Buffers) Length() (n int) {
+	for _, b := range *v {
+		n += len(b)
+	}
+	return n
+}
+
 func (v *Buffers) consume(n int64) {
 	for len(*v) > 0 {
 		ln0 := int64(len((*v)[0]))
