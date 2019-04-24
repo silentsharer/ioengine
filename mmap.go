@@ -250,3 +250,7 @@ func (mmap *MemoryMap) reCalcEnd(off int) {
 		mmap.end = off
 	}
 }
+
+func (mmap *MemoryMap) Option() Options {
+	return Options{}
+}

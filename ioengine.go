@@ -75,12 +75,14 @@ type File interface {
 	WriteAt(b []byte, off int64) (int, error)
 	WriteAtv(bs [][]byte, off int64) (int, error)
 	Append(bs [][]byte) (int, error)
+	// The behavior of Seek on a file opened with O_APPEND is not specified.
 	Seek(offset int64, whence int) (int64, error)
 	Truncate(size int64) error
 	FLock() error
 	FUnlock() error
 	Sync() error
 	Close() error
+	Option() Options
 }
 
 // Open opens the named file for reading

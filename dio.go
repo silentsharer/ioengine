@@ -29,3 +29,7 @@ func (dio *DirectIO) FUnlock() error {
 func (dio *DirectIO) Close() error {
 	return nil
 }
+
+func (dio *DirectIO) Option() Options {
+	return Options{}
+}
