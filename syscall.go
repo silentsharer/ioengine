@@ -57,9 +57,5 @@ func genericAppend(fd File, bs [][]byte) (int, error) {
 	// so that make sure file offset is the file end.
 	defer fd.Seek(0, os.SEEK_END)
 
-	if err := fd.FLock(); err != nil {
-		return 0, err
-	}
-	defer fd.FUnlock()
 	return fd.WriteAtv(bs, size)
 }

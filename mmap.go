@@ -11,9 +11,14 @@ import (
 
 // MemoryMap disk IO mode
 type MemoryMap struct {
-	data   []byte
+	path string
+	opt  Options
+	// simulate linux file max size
+	data []byte
+	// simulate linux file offset
 	offset int
-	end    int
+	// simulate linux file end
+	end int
 	*os.File
 	sync.RWMutex
 }
@@ -33,12 +38,26 @@ func newMemoryMap(name string, opt Options) (*MemoryMap, error) {
 	}
 
 	mmap := &MemoryMap{
+		path:   name,
+		opt:    opt,
 		data:   data,
 		offset: 0,
 		end:    0,
 		File:   fd,
 	}
-	runtime.SetFinalizer(mmap, (*mmap).Close)
+
+	// recalc mmap end
+	stat, err := fd.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if int64(opt.MmapSize) < stat.Size() {
+		mmap.end = opt.MmapSize
+	} else {
+		mmap.end = int(stat.Size())
+	}
+
+	// runtime.SetFinalizer(mmap, (*mmap).Close())
 	return mmap, nil
 }
 
@@ -48,6 +67,7 @@ func (mmap *MemoryMap) Fd() uintptr {
 }
 
 // Stat wraps standard I/O Stat
+// maybe should return the mmaped slice's FileInfo not the raw file's FileInfo
 func (mmap *MemoryMap) Stat() (os.FileInfo, error) {
 	return mmap.File.Stat()
 }
@@ -57,13 +77,17 @@ func (mmap *MemoryMap) Read(b []byte) (int, error) {
 	mmap.RLock()
 	defer mmap.RUnlock()
 
+	// If the caller wanted a zero byte read, return immediately.
+	if len(b) == 0 {
+		return 0, nil
+	}
 	if mmap.data == nil {
 		return 0, errors.New("mmap: closed")
 	}
-	if mmap.offset >= len(mmap.data) {
+	if mmap.offset >= mmap.end {
 		return 0, io.EOF
 	}
-	n := copy(b, mmap.data[mmap.offset:])
+	n := copy(b, mmap.data[mmap.offset:mmap.end])
 	mmap.offset += n
 	if n < len(b) {
 		return n, io.EOF
@@ -77,13 +101,20 @@ func (mmap *MemoryMap) ReadAt(b []byte, off int64) (int, error) {
 	mmap.RLock()
 	defer mmap.RUnlock()
 
+	// If the caller wanted a zero byte read, return immediately.
+	if len(b) == 0 {
+		return 0, nil
+	}
 	if mmap.data == nil {
 		return 0, errors.New("mmap: closed")
 	}
-	if off < 0 || int64(len(mmap.data)) < off {
-		return 0, fmt.Errorf("mmap: invalid ReadAt offset %d", off)
+	if off < 0 {
+		return 0, errors.New("negative offset")
 	}
-	n := copy(b, mmap.data[off:])
+	if int64(mmap.end) < off {
+		return 0, io.EOF
+	}
+	n := copy(b, mmap.data[off:mmap.end])
 	if n < len(b) {
 		return n, io.EOF
 	}
@@ -92,17 +123,21 @@ func (mmap *MemoryMap) ReadAt(b []byte, off int64) (int, error) {
 }
 
 // Write like any io.Write, Shares the same file offset.
-// If the mmaped file size is reached, it will return short write error.
+// If the mmaped file size is reached, it will return EOF.
 func (mmap *MemoryMap) Write(b []byte) (int, error) {
 	mmap.Lock()
 	defer mmap.Unlock()
 
+	if len(b) == 0 {
+		return 0, nil
+	}
 	if mmap.data == nil {
 		return 0, errors.New("mmap: closed")
 	}
 	if mmap.offset >= len(mmap.data) {
-		return 0, io.ErrShortWrite
+		return 0, io.EOF
 	}
+
 	n := copy(mmap.data[mmap.offset:], b)
 	mmap.offset += n
 	mmap.reCalcEnd(mmap.offset)
@@ -245,12 +280,13 @@ func (mmap *MemoryMap) Close() error {
 	return Munmap(data)
 }
 
+// Option return file options
+func (mmap *MemoryMap) Option() Options {
+	return mmap.opt
+}
+
 func (mmap *MemoryMap) reCalcEnd(off int) {
 	if off > mmap.end {
 		mmap.end = off
 	}
-}
-
-func (mmap *MemoryMap) Option() Options {
-	return Options{}
 }

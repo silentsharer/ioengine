@@ -28,7 +28,7 @@ type iocb struct {
 type event struct {
 	data unsafe.Pointer
 	pad1 uint32
-	cb   *iocb
+	obj  *iocb
 	pad2 uint32
 	res  int64
 	pad3 uint32

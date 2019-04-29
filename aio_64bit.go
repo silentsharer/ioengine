@@ -22,7 +22,7 @@ type iocb struct {
 
 type event struct {
 	data unsafe.Pointer
-	cb   *iocb
+	obj  *iocb
 	res  int64
 	res2 int64
 }
