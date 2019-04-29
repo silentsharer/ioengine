@@ -20,7 +20,7 @@ go get github.com/silentsharer/ioengine
 opt := ioengine.DefaultOptions
 opt.IOEngine = StandardIO
 
-fd, err := ioengine("/tmp/test", opt)
+fd, err := ioengine.Open("/tmp/test", opt)
 if err != nil {
 	handler(err)
 }
@@ -38,7 +38,7 @@ fd.Append(*b)
 opt := ioengine.DefaultOptions
 opt.IOEngine = AIO
 
-fd, err := ioengine("/tmp/test", opt)
+fd, err := ioengine.Open("/tmp/test", opt)
 if err != nil {
 	handler(err)
 }
