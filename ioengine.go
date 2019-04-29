@@ -43,45 +43,99 @@ const (
 
 // Options are params for creating IOEngine.
 type Options struct {
-	IOEngine         IOMode
-	Flag             int
-	Perm             os.FileMode
-	FileLock         FileLockMode
-	MmapSize         int
-	MmapWritable     bool
-	AIO              AIOMode
-	AIOMaxQueueDepth int
+	IOEngine      IOMode
+	Flag          int
+	Perm          os.FileMode
+	FileLock      FileLockMode
+	MmapSize      int
+	MmapWritable  bool
+	AIO           AIOMode
+	AIOQueueDepth int
+	AIOTimeout    int // ms, 0 means no timeout
 }
 
 // DefaultOptions is recommended options, you can modify these to suit your needs.
 var DefaultOptions = Options{
-	IOEngine:         AIO,
-	Flag:             os.O_RDWR | os.O_CREATE | os.O_SYNC,
-	Perm:             0644,
-	FileLock:         None,
-	MmapSize:         1<<30 - 1,
-	MmapWritable:     true,
-	AIO:              Libaio,
-	AIOMaxQueueDepth: 256,
+	IOEngine: AIO,
+	Flag:     os.O_RDWR | os.O_CREATE | os.O_SYNC,
+	Perm:     0644,
+	FileLock: None,
+	// MmapSize:         1<<30 - 1,
+	MmapSize:      128,
+	MmapWritable:  true,
+	AIO:           Libaio,
+	AIOQueueDepth: 256,
+	AIOTimeout:    0,
 }
 
 // File a unified common file operation interface
 type File interface {
+	// Fd returns the Unix fd or Windows handle referencing the open file.
+	// The fd is valid only until f.Close is called or f is garbage collected.
 	Fd() uintptr
+
+	// Stat returns the FileInfo structure describing file.
+	// The MMap mode returns the native file state instead of the memory slice.
 	Stat() (os.FileInfo, error)
+
+	// Read reads up to len(b) bytes from the File.
+	// It returns the number of bytes read and any error encountered.
+	// At end of file, Read returns io.EOF.
 	Read(b []byte) (int, error)
+
+	// ReadAt reads len(b) bytes from the File starting at byte offset off.
+	// It returns the number of bytes read and the error, if any.
+	// ReadAt always returns a non-nil error when n < len(b).
+	// At end of file, that error is io.EOF.
 	ReadAt(b []byte, off int64) (int, error)
+
+	// Write writes len(b) bytes to the File.
+	// It returns the number of bytes written and an error, if any.
+	// Write returns a non-nil error when n != len(b).
 	Write(b []byte) (int, error)
+
+	// WriteAt writes len(b) bytes to the File starting at byte offset off.
+	// It returns the number of bytes written and an error, if any.
+	// WriteAt returns a non-nil error when n != len(b).
 	WriteAt(b []byte, off int64) (int, error)
+
+	// WriteAtv write multiple discrete discontinuous mem block
+	// on AIO mode, it's impled by pwritev syscall
+	// on other mode, it's impled by multi call pwrite syscall
 	WriteAtv(bs [][]byte, off int64) (int, error)
+
+	// Append write data at the end of file
 	Append(bs [][]byte) (int, error)
+
+	// Seek sets the offset for the next Read or Write on file to offset, interpreted
+	// according to whence: 0 means relative to the origin of the file, 1 means
+	// relative to the current offset, and 2 means relative to the end.
+	// It returns the new offset and an error, if any.
 	// The behavior of Seek on a file opened with O_APPEND is not specified.
 	Seek(offset int64, whence int) (int64, error)
+
+	// Truncate changes the size of the file.
+	// It does not change the I/O offset.
+	// If there is an error, it will be of type *PathError.
 	Truncate(size int64) error
+
+	// FLock file lock
 	FLock() error
+
+	// FUnlock file unlock
 	FUnlock() error
+
+	// Sync commits the current contents of the file to stable storage.
+	// Typically, this means flushing the file system's in-memory copy
+	// of recently written data to disk.
 	Sync() error
+
+	// Close closes the File, rendering it unusable for I/O.
+	// On files that support SetDeadline, any pending I/O operations will
+	// be canceled and return immediately with an error.
 	Close() error
+
+	// Option return IO engine options
 	Option() Options
 }
 
@@ -94,8 +148,8 @@ func Open(name string, opt Options) (File, error) {
 		return newMemoryMap(name, opt)
 	case DIO:
 		return newDirectIO(name, opt)
-	//case AIO:
-	// return newAsyncIO(name, opt)
+	case AIO:
+		return newAsyncIO(name, opt)
 	default:
 		return nil, errors.New("Unsupported IO Engine")
 	}
