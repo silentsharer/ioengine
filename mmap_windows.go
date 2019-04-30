@@ -98,7 +98,6 @@ func (fi *FileIO) WriteAtv(bs [][]byte, off int64) (int, error) {
 }
 
 // Append write data to the end of file.
-// we recommend that open file with O_APPEND
 func (fi *FileIO) Append(bs [][]byte) (int, error) {
 	return genericAppend(fi, bs)
 }

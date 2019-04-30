@@ -123,6 +123,13 @@ type File interface {
 
 	// Append write data at the end of file
 	// We do not guarantee atomicity of concurrent append writes.
+	// Note: we should avoid O_APPEND here due to ta the following bug:
+	// POSIX requires that opening a file with the O_APPEND flag should
+	// have no affect on the location at which pwrite() writes data.
+	// However, on Linux, if a file is opened with O_APPEND, pwrite()
+	// appends data to the end of the file, regardless of the value of
+	// offset. on darwin, there is no this Bug.
+	// More info here: https://linux.die.net/man/2/pwrite
 	Append(bs [][]byte) (int, error)
 
 	// Seek sets the offset for the next Read or Write on file to offset, interpreted
