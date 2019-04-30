@@ -16,24 +16,6 @@ go get github.com/silentsharer/ioengine
 
 # example
 ```
-// create standardIO ioengine option
-opt := ioengine.DefaultOptions
-opt.IOEngine = StandardIO
-
-fd, err := ioengine.Open("/tmp/test", opt)
-if err != nil {
-	handler(err)
-}
-defer fd.Close()
-
-fd.Write([]byte("hello"))
-
-b := NewBuffers()
-b.Write([]byte("hello")).Write([]byte("world"))
-fd.Append(*b)
-```
-
-```
 // create AIO ioengine option
 opt := ioengine.DefaultOptions
 opt.IOEngine = AIO
@@ -59,7 +41,9 @@ copy(data1, []byte("world"))
 b := NewBuffers()
 b.Write(data1).Write(data2)
 
-fd.WriteAtv(b, 0)
+fd.WriteAtv(*b, 0)
 fd.Append(*b)
-
 ```
+
+# license
+Apache (see [LICENSE](https://github.com/silentsharer/ioengine/blob/master/LICENSE) file)
