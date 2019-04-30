@@ -41,3 +41,13 @@ func Sync(b []byte) error {
 func Munmap(b []byte) error {
 	return unix.Munmap(b)
 }
+
+// WriteAtv like linux pwritev, write to the specifies offset and dose not change the file offset.
+func (mmap *MemoryMap) WriteAtv(bs [][]byte, off int64) (int, error) {
+	return genericWriteAtv(mmap, bs, off)
+}
+
+// Append write data to the end of file.
+func (mmap *MemoryMap) Append(bs [][]byte) (int, error) {
+	return genericAppend(mmap, bs)
+}
