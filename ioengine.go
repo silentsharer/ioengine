@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-// IOMode specifies disk I/O mode, default AIO.
+// IOMode specifies disk I/O mode, default StandardIO.
 type IOMode int
 
 const (
@@ -43,28 +43,45 @@ const (
 
 // Options are params for creating IOEngine.
 type Options struct {
-	IOEngine      IOMode
-	Flag          int
-	Perm          os.FileMode
-	FileLock      FileLockMode
-	MmapSize      int
-	MmapWritable  bool
-	AIO           AIOMode
+	// IOEngine io mode
+	IOEngine IOMode
+
+	// Flag the file open mode
+	Flag int
+
+	// Perm the file perm
+	Perm os.FileMode
+
+	// FileLock file lock mode, default none
+	FileLock FileLockMode
+
+	// MmapSize mmap file size in memory
+	MmapSize int
+
+	// MmapWritable whether to allow mmap write
+	// if true, it will be use mmap write instead of standardIO write, not implemented yet.
+	MmapWritable bool
+
+	// AIO async IO mode, defaul libaio, the io_uring isn't implemented yet.
+	AIO AIOMode
+
+	// AIOQueueDepth libaio max events, it's also use to control client IO number.
 	AIOQueueDepth int
-	AIOTimeout    int // ms, 0 means no timeout
+
+	// AIOTimeout unit ms, libaio timeout, 0 means no timeout.
+	AIOTimeout int
 }
 
 // DefaultOptions is recommended options, you can modify these to suit your needs.
 var DefaultOptions = Options{
-	IOEngine: AIO,
-	Flag:     os.O_RDWR | os.O_CREATE | os.O_SYNC,
-	Perm:     0644,
-	FileLock: None,
-	// MmapSize:         1<<30 - 1,
-	MmapSize:      128,
-	MmapWritable:  true,
+	IOEngine:      StandardIO,
+	Flag:          os.O_RDWR | os.O_CREATE | os.O_SYNC,
+	Perm:          0644,
+	FileLock:      None,
+	MmapSize:      1<<30 - 1,
+	MmapWritable:  false,
 	AIO:           Libaio,
-	AIOQueueDepth: 256,
+	AIOQueueDepth: 1024,
 	AIOTimeout:    0,
 }
 
@@ -105,6 +122,7 @@ type File interface {
 	WriteAtv(bs [][]byte, off int64) (int, error)
 
 	// Append write data at the end of file
+	// We do not guarantee atomicity of concurrent append writes.
 	Append(bs [][]byte) (int, error)
 
 	// Seek sets the offset for the next Read or Write on file to offset, interpreted
@@ -119,10 +137,11 @@ type File interface {
 	// If there is an error, it will be of type *PathError.
 	Truncate(size int64) error
 
-	// FLock file lock
+	// FLock the lock is suggested and exclusive
 	FLock() error
 
-	// FUnlock file unlock
+	// FUnlock unlock the file lock
+	// it will be atomic release when file close.
 	FUnlock() error
 
 	// Sync commits the current contents of the file to stable storage.
@@ -131,8 +150,6 @@ type File interface {
 	Sync() error
 
 	// Close closes the File, rendering it unusable for I/O.
-	// On files that support SetDeadline, any pending I/O operations will
-	// be canceled and return immediately with an error.
 	Close() error
 
 	// Option return IO engine options

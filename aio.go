@@ -123,7 +123,8 @@ func (iocb *iocb) PrepPwrite(buf []byte, offset int64) {
 	iocb.offset = offset
 }
 
-func (iocb *iocb) PrepPreadv(iovecs []syscall.Iovec, offset int64) {
+func (iocb *iocb) PrepPreadv(bs [][]byte, offset int64) {
+	iovecs := bytes2Iovec(bs)
 	var p unsafe.Pointer
 	if len(iovecs) > 0 {
 		p = unsafe.Pointer(&iovecs[0])
@@ -136,7 +137,8 @@ func (iocb *iocb) PrepPreadv(iovecs []syscall.Iovec, offset int64) {
 	iocb.offset = offset
 }
 
-func (iocb *iocb) PrepPwritev(iovecs []syscall.Iovec, offset int64) {
+func (iocb *iocb) PrepPwritev(bs [][]byte, offset int64) {
+	iovecs := bytes2Iovec(bs)
 	var p unsafe.Pointer
 	if len(iovecs) > 0 {
 		p = unsafe.Pointer(&iovecs[0])

@@ -41,6 +41,7 @@ type requestState struct {
 }
 
 // AsyncIO async IO
+// maybe we can implement a simplified posix file system?
 type AsyncIO struct {
 	opt    Options
 
@@ -79,7 +80,10 @@ type AsyncIO struct {
 	request ConcurrentMap
 
 	// close wait all running IO completed and finish wait
-	close   chan struct{}
+	close chan struct{}
+
+	// trigger wait all running IO completed
+	trigger chan struct{}
 
 	sync.RWLock
 }
@@ -144,6 +148,7 @@ func (aio *AsyncIO) Close() error {
 
 	// send to signal to stop wait
 	aio.close <- struct{}
+	<-aio.close
 
 	// destroy async IO context
 	aio.ioctx.Destroy()
@@ -162,7 +167,11 @@ func (aio *AsyncIO) wait() {
 		select {
 		case <-close:
 			wait()
+			close <- struct{}
 			return
+		case <-trigger:
+			wait()
+			trigger <- struct{}
 		default:
 			wait()
 		}
@@ -288,11 +297,8 @@ func (aio *AsyncIO) getNextReady() *iocb {
 
 // waitAll will block until all submitted io are done
 func (aio *AsyncIO) waitAll() {
-	for {
-		if aio.running.Count() == 0 {
-			return
-		}
-	}
+	trigger <- struct{}
+	<-trigger
 }
 
 // WaitFor will block until the given RequestId is done
@@ -363,33 +369,10 @@ func (aio *AsyncIO) WriteAt(b []byte, offset int64) (int, error) {
 		return 0, nil
 	}
 
-	// get the next available iocb
-	iocb := aio.getNextReady()
-	iocb.PrepPwrite(b, offset)
-	if _, err := aio.ioctx.Submit([]iocb{*iocb}); err != nil {
-		aio.available.Set(iocb, iocb)
+	id, err := aio.submitIO(IOCmdPwrite, [][]byte{b}, offset)
+	if err != nil {
 		return 0, err
 	}
-
-	aio.Lock()
-	aio.reqID++
-	id := aio.reqID
-	aio.reCalcEnd(offset + int64(len(b)))
-	aio.Unlock()
-
-	// add the iocb to the running event pool
-	aio.running.Set(iocb, &runningEvent{
-		// this prevents the gc from collecting the buffer
-		data:b,
-		iocb:iocb,
-		reqID:id,
-	})
-
-	// add the request to the request pool
-	aio.request.Set(id, &requestState{
-		iocb:iocb,
-		done:false,
-	})
 
 	return aio.WaitFor(id)
 }
@@ -405,9 +388,45 @@ func (aio *AsyncIO) ReadAt(b []byte, offset int64) (int, error) {
 		return 0, nil
 	}
 
+	id, err := aio.submitIO(IOCmdPread, [][]byte{b}, offset)
+	if err != nil {
+		return 0, err
+	}
+
+	return aio.WaitFor(id)
+}
+
+func (aio *AsyncIO) WriteAtv(bs [][]byte, off int64) (int, error) {
+	if bs == nil {
+		return 0, nil
+	}
+	
+	id, err := aio.submitIO(IOCmdPwritev, bs, offset)
+	if err != nil {
+		return 0, err
+	}
+
+	return aio.WaitFor(id)
+}
+
+func (aio *AsyncIO) submitIO(cmd IocbCmd, bs [][]byte, offset int64) (RequestID, error) {
+	write := false
+
 	// get the next available iocb
 	iocb := aio.getNextReady()
-	iocb.PrepPread(b, offset)
+	switch cmd {
+	case IOCmdPread:
+		iocb.PrepPread(bs[0], offset)
+	case IOCmdPwrite:
+		write = true
+		iocb.PrepPwrite(bs[0], offset)
+	case IOCmdPreadv:
+		iocb.PrepPreadv(bs, offset)
+	case IOCmdPwritev:
+		write = true
+		iocb.PrepPwritev(bs, offset)
+	}
+
 	if _, err := aio.ioctx.Submit([]iocb{*iocb}); err != nil {
 		aio.available.Set(iocb, iocb)
 		return 0, err
@@ -416,6 +435,9 @@ func (aio *AsyncIO) ReadAt(b []byte, offset int64) (int, error) {
 	aio.Lock()
 	aio.reqID++
 	id := aio.reqID
+	if write {
+		aio.reCalcEnd(offset + int64(len(b)))
+	}
 	aio.Unlock()
 
 	// add the iocb to the running event pool
@@ -432,15 +454,20 @@ func (aio *AsyncIO) ReadAt(b []byte, offset int64) (int, error) {
 		done:false,
 	})
 
-	return aio.WaitFor(id)
-}
-
-func (aio *AsyncIO) WriteAtv(bs [][]byte, off int64) (int, error) {
-	return 0, nil
+	return id, nil
 }
 
 func (aio *AsyncIO) Append(bs [][]byte) (int, error) {
-	return 0, nil
+	if bs == nil {
+		return 0, nil
+	}
+
+	id, err := aio.submitIO(IOCmdPwritev, bs, aio.end)
+	if err != nil {
+		return 0, err
+	}
+
+	return aio.WaitFor(id)
 }
 
 func (aio *AsyncIO) Seek(offset int64, whence int) (int64, error) {
@@ -458,23 +485,23 @@ func (aio *AsyncIO) Seek(offset int64, whence int) (int64, error) {
 	return nOffset, nil
 }
 
-// Truncate will not wait for all submitted jobs to finish 
+// Truncate will wait for all submitted jobs to finish 
 // trunctate the file to the designated size.
 func (aio *AsyncIO) Truncate(size int64) error {
-	// do we need to wait all running IO completed?
+	// do we really need to wait all running IO completed?
 	// what will happen write file when truncate?
-	// aio.waitAll()
+	aio.waitAll()
 	return aio.fd.Truncate(size)
 }
 
-// Sync will not wait for all submitted jobs to finish and then sync
+// Sync will wait for all submitted jobs to finish and then sync
 // the file descriptor.  Because the Linux kernel does not actually
 // support Sync via the AIO interface we just issue a plain old sync
 // via userland. No async here. Sync don't ack outstanding requests
 func (aio *AsyncIO) Sync() error {
-	// do we need to wait all running IO completed?
+	// do we really need to wait all running IO completed?
 	// what will happen write file when sync?
-	// aio.waitAll()
+	aio.waitAll()
 	return aio.fd.Sync()
 }
 
