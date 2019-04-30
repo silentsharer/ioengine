@@ -28,11 +28,11 @@ type timespec struct {
 
 type IOContext uint
 
-func NewIOContext() (IOContext, error) {
+func NewIOContext(maxEvents int) (IOContext, error) {
 	var ioctx IOContext
 	_, _, err := syscall.Syscall(syscall.SYS_IO_SETUP, uintptr(maxEvents), uintptr(unsafe.Pointer(&ioctx)), 0)
 	if err != 0 {
-		return nil, os.NewSyscallError("IO_SETUP", err)
+		return 0, os.NewSyscallError("IO_SETUP", err)
 	}
 	return ioctx, nil
 }
@@ -45,7 +45,7 @@ func (ioctx IOContext) Destroy() error {
 	return nil
 }
 
-func (ioctx IOContext) Submit(iocbs []iocb) (int, error) {
+func (ioctx IOContext) Submit(iocbs []*iocb) (int, error) {
 	var p unsafe.Pointer
 	if len(iocbs) > 0 {
 		p = unsafe.Pointer(&iocbs[0])
@@ -165,5 +165,5 @@ func (iocb *iocb) SetEventFd(eventfd int) {
 }
 
 func (iocb *iocb) OpCode() IocbCmd {
-	return iocb.opcode
+	return IocbCmd(iocb.opcode)
 }

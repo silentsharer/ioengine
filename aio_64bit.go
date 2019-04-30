@@ -8,14 +8,13 @@ import "unsafe"
 type iocb struct {
 	data   unsafe.Pointer
 	key    uint64
-	pad1   uint64
 	opcode int16
 	prio   int16
 	fd     uint32
 	buf    unsafe.Pointer
 	nbytes uint64
 	offset int64
-	pad2   int64
+	pad1   int64
 	flags  uint32
 	resfd  uint32
 }

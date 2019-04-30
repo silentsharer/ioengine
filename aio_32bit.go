@@ -18,9 +18,8 @@ type iocb struct {
 	buf    unsafe.Pointer
 	pad3   uint32
 	nbytes uint64
-	pad4   uint32
 	offset int64
-	pad5   int64
+	pad4   int64
 	flags  uint32
 	resfd  uint32
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"unsafe"
 )
 
@@ -27,7 +28,7 @@ var (
 type RequestID uint
 
 type runningEvent struct {
-	data  []byte
+	data  [][]byte
 	wrote uint
 	iocb  *iocb
 	reqID RequestID
@@ -41,18 +42,19 @@ type requestState struct {
 }
 
 // AsyncIO async IO
-// maybe we can implement a simplified posix file system?
+// maybe we can implement a simplified posix file system
+// by implement an own disk allocator? Give it a try？
 type AsyncIO struct {
-	opt    Options
+	opt Options
 
-	// fd raw file descriptor 
-	fd     *os.File
+	// fd raw file descriptor
+	fd *os.File
 
 	// ioctx the value after initialization isn't 0
-	ioctx  IOContext
+	ioctx IOContext
 
 	// iocbs it's used to do IO
-	iocbs  []*iocb
+	iocbs []*iocb
 
 	// events it's used to capture completed IO event
 	events []event
@@ -61,7 +63,7 @@ type AsyncIO struct {
 	offset int64
 
 	// end the end of file
-	end   int64
+	end int64
 
 	// reqID every read or write auto incre id
 	reqID RequestID
@@ -85,7 +87,7 @@ type AsyncIO struct {
 	// trigger wait all running IO completed
 	trigger chan struct{}
 
-	sync.RWLock
+	sync.RWMutex
 }
 
 func newAsyncIO(name string, opt Options) (*AsyncIO, error) {
@@ -107,7 +109,7 @@ func newAsyncIO(name string, opt Options) (*AsyncIO, error) {
 	}
 	end := stat.Size()
 
-	ioctx, err := NewIOContext()
+	ioctx, err := NewIOContext(opt.AIOQueueDepth)
 	if err != nil {
 		fd.Close()
 		return nil, err
@@ -122,7 +124,7 @@ func newAsyncIO(name string, opt Options) (*AsyncIO, error) {
 	}
 
 	aio := &AsyncIO{
-		File:      fd,
+		fd:        fd,
 		ioctx:     ioctx,
 		iocbs:     iocbs,
 		events:    make([]event, opt.AIOQueueDepth),
@@ -132,6 +134,8 @@ func newAsyncIO(name string, opt Options) (*AsyncIO, error) {
 		available: available,
 		running:   NewConcurrentMap(),
 		request:   NewConcurrentMap(),
+		close:     make(chan struct{}),
+		trigger:   make(chan struct{}),
 	}
 
 	// start a goroutine loop to fetch completed IO
@@ -147,8 +151,15 @@ func (aio *AsyncIO) Close() error {
 	}
 
 	// send to signal to stop wait
-	aio.close <- struct{}
+	aio.close <- struct{}{}
 	<-aio.close
+
+	if aio.close != nil {
+		close(aio.close)
+	}
+	if aio.trigger != nil {
+		close(aio.trigger)
+	}
 
 	// destroy async IO context
 	aio.ioctx.Destroy()
@@ -165,32 +176,32 @@ func (aio *AsyncIO) Close() error {
 func (aio *AsyncIO) wait() {
 	for {
 		select {
-		case <-close:
-			wait()
-			close <- struct{}
+		case <-aio.close:
+			aio.waitEvents()
+			aio.close <- struct{}{}
 			return
-		case <-trigger:
-			wait()
-			trigger <- struct{}
+		case <-aio.trigger:
+			aio.waitEvents()
+			aio.trigger <- struct{}{}
 		default:
-			wait()
+			aio.waitEvents()
 		}
 	}
 }
 
 func (aio *AsyncIO) waitEvents() error {
-	numRunningIO := running.Count()
+	numRunningIO := aio.running.Count()
 	if numRunningIO == 0 {
 		return nil
 	}
 
-	t := timeout{
+	t := timespec{
 		sec:  aio.opt.AIOTimeout / 1000,
 		nsec: (aio.opt.AIOTimeout % 1000) * 1000 * 1000,
 	}
 
 	// wait for at least one running IO to complete.
-	n, err := aio.ioctx.GetEvents(1, uintptr(numRunningIO), aio.events, t)
+	n, err := aio.ioctx.GetEvents(1, numRunningIO, aio.events, t)
 	if err != nil {
 		return err
 	}
@@ -212,51 +223,61 @@ func (aio *AsyncIO) verifyEvent(evt event) error {
 	if evt.obj == nil {
 		return ErrNilCallback
 	}
-	revt, ok := aio.running.Get(pointer2string(unsafe.Pointer(evt.obj)))
+	re, ok := aio.running.Get(pointer2string(unsafe.Pointer(evt.obj)))
 	if !ok {
 		return ErrUntrackedEventKey
 	}
-	if revt.obj != evt.obj {
+	revt, ok := re.(*runningEvent)
+	if !ok {
+		return ErrInvalidEventPtr
+	}
+	if revt.iocb != evt.obj {
 		return ErrInvalidEventPtr
 	}
 	// an error occured with this event, remove the running event and set error code.
 	if evt.res < 0 {
-		return aio.freeEvent(revt, evt.iocb, lookupErrNo(evt.res))
+		return aio.freeEvent(revt, evt.obj, lookupErrNo(int(evt.res)))
 	}
 	//we have an active event returned and its one we are tracking
 	//ensure it wrote our entire buffer, res is > 0 at this point
-	if evt.res > 0 && uint(len(revt.data)) != uint(evt.res)+revt.wrote {
+	if evt.res > 0 && uint(count(revt.data)) != (uint(evt.res)+revt.wrote) {
 		revt.wrote += uint(evt.res)
-		if err := aio.resubmit(); err != nil {
+		if err := aio.resubmit(revt); err != nil {
 			return err
 		}
 		return nil
 	}
 	revt.wrote += uint(evt.res)
 
-	return aio.freeEvent(revt, evt.iocb, nil)
+	return aio.freeEvent(revt, evt.obj, nil)
 }
 
 // resubmit puts a request back into the kernel
 // this is done when a partial read or write occurs
 func (aio *AsyncIO) resubmit(re *runningEvent) error {
 	// double check we are not about to roll outside our buffer
-	if re.wrote >= uint(len(re.data)) {
+	if re.wrote >= uint(count(re.data)) {
 		return nil
 	}
 
-	nBuf := re.data[re.wrote:]
 	nOffset := re.iocb.offset + int64(re.wrote)
 	switch re.iocb.OpCode() {
 	case IOCmdPread:
+		nBuf := re.data[0][re.wrote:]
 		re.iocb.PrepPread(nBuf, nOffset)
 	case IOCmdPwrite:
+		nBuf := re.data[0][re.wrote:]
 		re.iocb.PrepPwrite(nBuf, nOffset)
 	case IOCmdPreadv:
+		consume(&re.data, int64(re.wrote))
+		re.iocb.PrepPreadv(re.data, nOffset)
 	case IOCmdPwritev:
+		consume(&re.data, int64(re.wrote))
+		re.iocb.PrepPwritev(re.data, nOffset)
 	}
 
-	return aio.ioctx.Submit([]iocb{*re.iocb})
+	_, err := aio.ioctx.Submit([]*iocb{re.iocb})
+	return err
 }
 
 // freeEvent removes an running event and return its iocb to the available pool
@@ -271,7 +292,11 @@ func (aio *AsyncIO) freeEvent(re *runningEvent, iocb *iocb, err error) error {
 	aio.available.Set(pointer2string(unsafe.Pointer(re.iocb)), re.iocb)
 
 	// update the stat in request pool
-	r, ok := aio.request.Get(int2string(int64(re.reqID)))
+	ri, ok := aio.request.Get(int2string(int64(re.reqID)))
+	if !ok {
+		return ErrReqIDNotFound
+	}
+	r, ok := ri.(*requestState)
 	if !ok {
 		return ErrReqIDNotFound
 	}
@@ -290,15 +315,18 @@ func (aio *AsyncIO) getNextReady() *iocb {
 	for {
 		_, v, has := aio.available.RandomPop()
 		if has {
-			return (*iocb)(unsafe.Pointer(v))
+			nIocb, ok := v.(*iocb)
+			if ok {
+				return nIocb
+			}
 		}
 	}
 }
 
 // waitAll will block until all submitted io are done
 func (aio *AsyncIO) waitAll() {
-	trigger <- struct{}
-	<-trigger
+	aio.trigger <- struct{}{}
+	<-aio.trigger
 }
 
 // WaitFor will block until the given RequestId is done
@@ -322,7 +350,11 @@ func (aio *AsyncIO) IsDone(id RequestID) (bool, error) {
 	if !ok {
 		return false, ErrReqIDNotFound
 	}
-	return (*requestState)(v).done, nil
+	r, ok := v.(*requestState)
+	if !ok {
+		return false, ErrReqIDNotFound
+	}
+	return r.done, nil
 }
 
 // Ack acknowledges that we have accepted a finished result ID
@@ -332,10 +364,13 @@ func (aio *AsyncIO) ack(id RequestID) (int, error) {
 	if !ok {
 		return 0, ErrReqIDNotFound
 	}
-	stat := (*requestState)(v)
-	if stat.done {
+	r, ok := v.(*requestState)
+	if !ok {
+		return 0, ErrReqIDNotFound
+	}
+	if r.done {
 		aio.request.Remove(int2string(int64(id)))
-		return stat.bytes, stat.err
+		return int(r.bytes), r.err
 	}
 	return 0, ErrNotDone
 }
@@ -360,7 +395,7 @@ func (aio *AsyncIO) Stat() (os.FileInfo, error) {
 // the buffer cannot change before the write completes.
 func (aio *AsyncIO) Write(b []byte) (int, error) {
 	nw, err := aio.WriteAt(b, aio.offset)
-	aio.offset += nw
+	aio.offset += int64(nw)
 	return nw, err
 }
 
@@ -378,8 +413,8 @@ func (aio *AsyncIO) WriteAt(b []byte, offset int64) (int, error) {
 }
 
 func (aio *AsyncIO) Read(b []byte) (int, error) {
-	nr, err := aio.Read(b)
-	aio.offset += nr
+	nr, err := aio.ReadAt(b, aio.offset)
+	aio.offset += int64(nr)
 	return nr, err
 }
 
@@ -396,11 +431,11 @@ func (aio *AsyncIO) ReadAt(b []byte, offset int64) (int, error) {
 	return aio.WaitFor(id)
 }
 
-func (aio *AsyncIO) WriteAtv(bs [][]byte, off int64) (int, error) {
+func (aio *AsyncIO) WriteAtv(bs [][]byte, offset int64) (int, error) {
 	if bs == nil {
 		return 0, nil
 	}
-	
+
 	id, err := aio.submitIO(IOCmdPwritev, bs, offset)
 	if err != nil {
 		return 0, err
@@ -413,22 +448,22 @@ func (aio *AsyncIO) submitIO(cmd IocbCmd, bs [][]byte, offset int64) (RequestID,
 	write := false
 
 	// get the next available iocb
-	iocb := aio.getNextReady()
+	nIocb := aio.getNextReady()
 	switch cmd {
 	case IOCmdPread:
-		iocb.PrepPread(bs[0], offset)
+		nIocb.PrepPread(bs[0], offset)
 	case IOCmdPwrite:
 		write = true
-		iocb.PrepPwrite(bs[0], offset)
+		nIocb.PrepPwrite(bs[0], offset)
 	case IOCmdPreadv:
-		iocb.PrepPreadv(bs, offset)
+		nIocb.PrepPreadv(bs, offset)
 	case IOCmdPwritev:
 		write = true
-		iocb.PrepPwritev(bs, offset)
+		nIocb.PrepPwritev(bs, offset)
 	}
 
-	if _, err := aio.ioctx.Submit([]iocb{*iocb}); err != nil {
-		aio.available.Set(iocb, iocb)
+	if _, err := aio.ioctx.Submit([]*iocb{nIocb}); err != nil {
+		aio.available.Set(pointer2string(unsafe.Pointer(nIocb)), nIocb)
 		return 0, err
 	}
 
@@ -436,23 +471,27 @@ func (aio *AsyncIO) submitIO(cmd IocbCmd, bs [][]byte, offset int64) (RequestID,
 	aio.reqID++
 	id := aio.reqID
 	if write {
-		aio.reCalcEnd(offset + int64(len(b)))
+		aio.reCalcEnd(offset + int64(count(bs)))
 	}
 	aio.Unlock()
 
-	// add the iocb to the running event pool
-	aio.running.Set(iocb, &runningEvent{
+	re := &runningEvent{
 		// this prevents the gc from collecting the buffer
-		data:b,
-		iocb:iocb,
-		reqID:id,
-	})
+		data:  bs,
+		iocb:  nIocb,
+		reqID: id,
+	}
+
+	rs := &requestState{
+		iocb: nIocb,
+		done: false,
+	}
+
+	// add the iocb to the running event pool
+	aio.running.Set(pointer2string(unsafe.Pointer(nIocb)), re)
 
 	// add the request to the request pool
-	aio.request.Set(id, &requestState{
-		iocb:iocb,
-		done:false,
-	})
+	aio.request.Set(int2string(int64(id)), rs)
 
 	return id, nil
 }
@@ -471,6 +510,9 @@ func (aio *AsyncIO) Append(bs [][]byte) (int, error) {
 }
 
 func (aio *AsyncIO) Seek(offset int64, whence int) (int64, error) {
+	aio.Lock()
+	defer aio.Unlock()
+
 	var nOffset int64
 	switch whence {
 	case 0:
@@ -485,7 +527,7 @@ func (aio *AsyncIO) Seek(offset int64, whence int) (int64, error) {
 	return nOffset, nil
 }
 
-// Truncate will wait for all submitted jobs to finish 
+// Truncate will wait for all submitted jobs to finish
 // trunctate the file to the designated size.
 func (aio *AsyncIO) Truncate(size int64) error {
 	// do we really need to wait all running IO completed?
