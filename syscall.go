@@ -2,6 +2,7 @@ package ioengine
 
 import (
 	"os"
+	"syscall"
 )
 
 // Single-word zero for use when we need a valid pointer to 0 bytes.
@@ -42,7 +43,7 @@ func genericWritev(fd File, bs [][]byte) (n int, err error) {
 func genericAppend(fd File, bs [][]byte) (int, error) {
 	opt := fd.Option()
 
-	// open file with O_APPEND not need to flock
+	// open file with O_APPEND not need to seek
 	if (opt.Flag & os.O_APPEND) > 0 {
 		return genericWritev(fd, bs)
 	}
@@ -52,10 +53,22 @@ func genericAppend(fd File, bs [][]byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// Because use writeat to simulate an append write
+	// Because use writeAt to simulate an append write
 	// it doesn't change the file offset, to keep append semantic
 	// so that make sure file offset is the file end.
 	defer fd.Seek(0, os.SEEK_END)
 
 	return fd.WriteAtv(bs, size)
+}
+
+func bytes2Iovec(bs [][]byte) []syscall.Iovec {
+	var iovecs []syscall.Iovec
+	for _, chunk := range bs {
+		if len(chunk) == 0 {
+			continue
+		}
+		iovecs = append(iovecs, syscall.Iovec{Base: &chunk[0]})
+		iovecs[len(iovecs)-1].SetLen(len(chunk))
+	}
+	return iovecs
 }
